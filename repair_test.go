@@ -1,9 +1,7 @@
 package tsdb
 
 import (
-	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"testing"
@@ -14,27 +12,27 @@ import (
 	"github.com/prometheus/tsdb/labels"
 )
 
-func copyFiles(tmpIndex, tmpMeta *os.File, dir string) error {
+func copyFiles(copyIndex, copyMeta *os.File, dir string) error {
 	// Create copies of files we will modify in tmp.
 
-	indexContents, err := os.Open(fmt.Sprintf("%sindex", dir))
+	indexContents, err := os.Open(dir + "index")
 	if err != nil {
 		return err
 	}
-	metaContents, err := os.Open(fmt.Sprintf("%smeta.json", dir))
+	metaContents, err := os.Open(dir + "meta.json")
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(tmpMeta, metaContents)
+	_, err = io.Copy(copyMeta, metaContents)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(tmpIndex, indexContents)
+	_, err = io.Copy(copyIndex, indexContents)
 	if err != nil {
 		return err
 	}
-	tmpIndex.Close()
-	tmpMeta.Close()
+	copyIndex.Close()
+	copyMeta.Close()
 	return nil
 }
 
@@ -73,45 +71,41 @@ func TestRepairBadIndexVersion(t *testing.T) {
 	// 	}
 	// }
 
-	const baseDir = "testdata/repair_index_version"
-	const tempDir = "tempDir"
-	dbDir := fmt.Sprintf("%s/01BZJ9WJQPWHGNC2W4J9TA62KC/", baseDir)
+	const testDir = "testdata/repair_index_version"
+	const testDirBlock = testDir + "/01BZJ9WJQPWHGNC2W4J9TA62KC/"
 
-	err := os.Mkdir(tempDir, 0755)
+	const copyDir = "copyDir/"
+	const copyDirBlock = copyDir + "01BZJ9WJQPWHGNC2W4J9TA62KC/"
+
+	err := os.MkdirAll(copyDirBlock, 0755)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpIndex, err := ioutil.TempFile(tempDir, "index")
+	defer os.RemoveAll(copyDir)
+
+	copyIndex, err := os.Create(copyDirBlock + "index")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpMeta, err := ioutil.TempFile(tempDir, "meta.json")
+	copyMeta, err := os.Create(copyDirBlock + "meta.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = copyFiles(tmpIndex, tmpMeta, dbDir)
+	err = copyFiles(copyIndex, copyMeta, testDirBlock)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	defer func() {
-		os.Rename(tmpIndex.Name(), fmt.Sprintf("%sindex", dbDir))
-		os.Rename(tmpMeta.Name(), fmt.Sprintf("%smeta.json", dbDir))
-		os.RemoveAll(tempDir)
-		os.RemoveAll(fmt.Sprintf("%s/wal/", baseDir))
-		os.RemoveAll(fmt.Sprintf("%s/lock", baseDir))
-	}()
 
 	// In its current state, lookups should fail with the fixed code.
-	meta, err := readMetaFile(dbDir)
+	meta, err := readMetaFile(copyDirBlock)
 	if err == nil {
 		t.Fatal("error expected but got none")
 	}
 	// Touch chunks dir in block.
-	os.MkdirAll(dbDir+"chunks", 0777)
+	os.MkdirAll(copyDirBlock+"chunks", 0777)
 
-	r, err := index.NewFileReader(dbDir + "index")
+	r, err := index.NewFileReader(copyDirBlock + "index")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +126,13 @@ func TestRepairBadIndexVersion(t *testing.T) {
 	}
 
 	// On DB opening all blocks in the base dir should be repaired.
-	db, err := Open("testdata/repair_index_version", nil, nil, nil)
+	db, err := Open(copyDir, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
 
-	r, err = index.NewFileReader(dbDir + "index")
+	r, err = index.NewFileReader(copyDirBlock + "index")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +162,7 @@ func TestRepairBadIndexVersion(t *testing.T) {
 		t.Fatalf("unexpected result %v", res)
 	}
 
-	meta, err = readMetaFile(dbDir)
+	meta, err = readMetaFile(copyDirBlock)
 	if err != nil {
 		t.Fatal(err)
 	}
