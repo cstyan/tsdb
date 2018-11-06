@@ -22,9 +22,11 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/tsdb/testutil"
+	fsnotify "gopkg.in/fsnotify/fsnotify.v1"
 )
 
 func encodedRecord(t recType, b []byte) []byte {
@@ -213,6 +215,71 @@ func TestWAL_FuzzWriteRead(t *testing.T) {
 		}
 	}
 	testutil.Ok(t, rdr.Err())
+}
+
+func watchWal(walDir string) {
+	var err error
+	nw, err := New(nil, nil, walDir)
+	if err != nil {
+		return
+	}
+
+	_, n, err := nw.Segments()
+	if err != nil {
+		return
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return
+	}
+
+	defer watcher.Close()
+
+	currentSegment := n
+	segment, _ := OpenReadSegment(SegmentName(walDir, currentSegment))
+	watcher.Add(walDir)
+
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				time.Sleep(time.Millisecond)
+				r := NewReader(segment)
+				for r.Next() {
+					// Nothing
+				}
+			}
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				segment.Close()
+				currentSegment++
+				segment, _ = OpenReadSegment((SegmentName(walDir, currentSegment)))
+			}
+		case <-watcher.Errors:
+			return
+		}
+	}
+}
+
+func TestWAL_ReaderPanic(t *testing.T) {
+	// Start a WAL and write records to it as usual.
+	dir, err := ioutil.TempDir("", "walpanic")
+	testutil.Ok(t, err)
+	defer os.RemoveAll(dir)
+
+	w, err := NewSize(nil, nil, dir, 64*1024)
+	testutil.Ok(t, err)
+
+	go watchWal(dir)
+
+	var buf [2048]byte
+	var recs [][]byte
+	for i := 0; i < 100000; i++ {
+		recs = append(recs, buf[:])
+		err := w.Log(recs...)
+		testutil.Ok(t, err)
+		recs = recs[:0]
+	}
 }
 
 func TestWAL_Repair(t *testing.T) {
