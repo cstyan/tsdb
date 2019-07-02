@@ -235,11 +235,12 @@ func TestReader_Live(t *testing.T) {
 	}
 }
 
-const fuzzLen = 500
-
-func generateRandomEntries(w *WAL, records chan []byte) error {
+// generates fuzzLen worth of fake WAL entries and writes them to the WAL in
+// batches of random sizes. Also sends those same records over a channel so they
+// can be used to compare input and output data in tests.
+func writeRandomEntries(w *WAL, numEntries int, records chan []byte) error {
 	var recs [][]byte
-	for i := 0; i < fuzzLen; i++ {
+	for i := 0; i < numEntries; i++ {
 		var sz int64
 		switch i % 5 {
 		case 0, 1:
@@ -309,6 +310,7 @@ func allSegments(dir string) (io.ReadCloser, error) {
 }
 
 func TestReaderFuzz(t *testing.T) {
+	fuzzLen := 500
 	for name, fn := range readerConstructors {
 		for _, compress := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s,compress=%t", name, compress), func(t *testing.T) {
@@ -323,7 +325,7 @@ func TestReaderFuzz(t *testing.T) {
 
 				// Buffering required as we're not reading concurrently.
 				input := make(chan []byte, fuzzLen)
-				err = generateRandomEntries(w, input)
+				err = writeRandomEntries(w, fuzzLen, input)
 				testutil.Ok(t, err)
 				close(input)
 
@@ -346,6 +348,7 @@ func TestReaderFuzz(t *testing.T) {
 }
 
 func TestReaderFuzz_Live(t *testing.T) {
+	fuzzLen := 50
 	logger := testutil.NewLogger(t)
 	for _, compress := range []bool{false, true} {
 		t.Run(fmt.Sprintf("compress=%t", compress), func(t *testing.T) {
@@ -361,10 +364,10 @@ func TestReaderFuzz_Live(t *testing.T) {
 
 			// In the background, generate a stream of random records and write them
 			// to the WAL.
-			input := make(chan []byte, fuzzLen/10) // buffering required as we sometimes batch WAL writes.
+			input := make(chan []byte, fuzzLen) // buffering required as we sometimes batch WAL writes.
 			done := make(chan struct{})
 			go func() {
-				err := generateRandomEntries(w, input)
+				err := writeRandomEntries(w, fuzzLen, input)
 				testutil.Ok(t, err)
 				time.Sleep(100 * time.Millisecond)
 				close(done)
